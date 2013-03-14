@@ -1,0 +1,85 @@
+/**
+ * Definitions for status update messages from worker processes.
+ * A log composed using this format can be parsed by the process control
+ * framework in order to propagate status info back into a larger framework.
+ * Such a log can also be used for distributed process post-mortem analysis.
+ */
+
+option java_generic_services = true;
+option java_package = "com.mapr.workGroup";
+option java_outer_classname = "ProgressNote";
+
+/**
+ * the basic message is a union of the other kinds of message.  By convention,
+ * only one of these alternatives is actually used.
+ */
+message Update {
+    optional Start start = 1;
+    optional Progress progress = 2;
+    optional Opaque opaque = 3;
+    optional Note note = 4;
+    optional Complete complete = 5;
+}
+
+/**
+ * When the process starts, it should record the start time and it's own name and possibly an
+ * id (in case the log is shared).
+ */
+message Start {
+    optional int64 id = 1;
+    optional int64 time = 2;
+    optional string name = 3;
+}
+
+/**
+ * As progress is made, status values can be recorded.
+ */
+message Progress {
+    optional int64 id = 1;
+    optional int64 time = 2;
+    repeated KeyValue count = 3;
+}
+
+/**
+ * Record a human readable note
+ */
+message Note {
+    optional int64 id = 1;
+    optional int64 time = 2;
+    optional string note = 3;
+}
+
+/**
+ * The application may need to have its own log data that the framework doesn't understand.
+ */
+message Opaque {
+    optional int64 id = 1;
+    optional int64 time = 2;
+    repeated bytes data = 3;
+}
+
+/**
+ * Each key value pair can increment a value or can set it.
+ */
+message KeyValue {
+    optional int64 id = 1;
+    optional string key = 2;
+    // increment
+    optional int32 integerIncrement = 3;
+    optional double doubleIncrement = 4;
+    // set value absolutely
+    optional int64 ivalue = 5;
+    optional double dvalue = 6;
+}
+
+/**
+ * This message should be included when the process completes.
+ */
+message Complete {
+    optional int64 id = 1;
+    optional int64 time = 2;
+    repeated KeyValue count = 3;
+    optional int32 exitStatus = 4;
+    optional string stackTrace = 5;
+    optional string exitMessage = 6;
+}

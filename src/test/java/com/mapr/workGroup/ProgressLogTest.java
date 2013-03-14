@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class ProgressLogTest {
     @Test
@@ -26,6 +28,8 @@ public class ProgressLogTest {
         Map<String, Double> r = ProgressLog.readTotals(logFile);
         assertEquals(5.0, r.get("k"), 0.0);
         assertEquals(11.0, r.get("x"), 0.0);
+        assertTrue(log.finished());
+        assertTrue(log.success());
     }
 
     @Test
@@ -39,7 +43,9 @@ public class ProgressLogTest {
         log.fail("failed", new Exception());
 
         Map<String, Double> r = ProgressLog.readTotals(logFile);
-        assertEquals(5.0, r.get("k"), 0.0);
-        assertEquals(11.0, r.get("x"), 0.0);
+        assertEquals(3, r.get("k"), 0.0);
+        assertEquals(1.0, r.get("x"), 0.0);
+        assertTrue(log.finished());
+        assertFalse(log.success());
     }
 }

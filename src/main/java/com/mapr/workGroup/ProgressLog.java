@@ -12,6 +12,10 @@ import java.util.Random;
 public class ProgressLog {
     private FileOutputStream stream;
     private final long id;
+    private static boolean returnStatus = false;
+    private static String backTrace = null;
+    private static String message;
+    private static boolean completed;
 
     private ProgressLog(String name, FileOutputStream stream) throws IOException {
         this.stream = stream;
@@ -93,11 +97,7 @@ public class ProgressLog {
                         v = 0.0;
                         r.put(kv.getKey(), v);
                     }
-                    if (kv.hasDvalue()) {
-                        v = kv.getDvalue();
-                    } else if (kv.hasDoubleIncrement()) {
-                        v += kv.getDoubleIncrement();
-                    } else if (kv.hasIvalue()) {
+                    if (kv.hasIvalue()) {
                         v = (double) kv.getIvalue();
                     } else if (kv.hasIntegerIncrement()) {
                         v += kv.getIntegerIncrement();
@@ -106,9 +106,31 @@ public class ProgressLog {
                     }
                     r.put(kv.getKey(), v);
                 }
+            } else if (update.hasComplete()) {
+                completed = true;
+                returnStatus = update.getComplete().getExitStatus() == 0;
+                backTrace = update.getComplete().getStackTrace();
+                message = update.getComplete().getExitMessage();
             }
             update = ProgressNote.Update.parseDelimitedFrom(input);
         }
+
         return r;
+    }
+
+    public boolean finished() {
+        return completed;
+    }
+
+    public String exitMessage() {
+        return message;
+    }
+
+    public boolean success() {
+        return returnStatus;
+    }
+
+    public String getStackTrace() {
+        return backTrace;
     }
 }

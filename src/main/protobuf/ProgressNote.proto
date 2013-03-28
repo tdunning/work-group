@@ -26,8 +26,8 @@ message Update {
  * id (in case the log is shared).
  */
 message Start {
-    optional int64 id = 1;
-    optional int64 time = 2;
+    optional uint64 id = 1;
+    optional uint64 time = 2;
     optional string name = 3;
 }
 
@@ -35,8 +35,8 @@ message Start {
  * As progress is made, status values can be recorded.
  */
 message Progress {
-    optional int64 id = 1;
-    optional int64 time = 2;
+    optional uint64 id = 1;
+    optional uint64 time = 2;
     repeated KeyValue count = 3;
 }
 
@@ -44,8 +44,8 @@ message Progress {
  * Record a human readable note
  */
 message Note {
-    optional int64 id = 1;
-    optional int64 time = 2;
+    optional uint64 id = 1;
+    optional uint64 time = 2;
     optional string note = 3;
 }
 
@@ -53,8 +53,8 @@ message Note {
  * The application may need to have its own log data that the framework doesn't understand.
  */
 message Opaque {
-    optional int64 id = 1;
-    optional int64 time = 2;
+    optional uint64 id = 1;
+    optional uint64 time = 2;
     repeated bytes data = 3;
 }
 
@@ -62,7 +62,7 @@ message Opaque {
  * Each key value pair can increment a value or can set it.
  */
 message KeyValue {
-    optional int64 id = 1;
+    optional uint64 id = 1;
     optional string key = 2;
     // increment
     optional int32 integerIncrement = 3;
@@ -76,8 +76,8 @@ message KeyValue {
  * This message should be included when the process completes.
  */
 message Complete {
-    optional int64 id = 1;
-    optional int64 time = 2;
+    optional uint64 id = 1;
+    optional uint64 time = 2;
     repeated KeyValue count = 3;
     optional int32 exitStatus = 4;
     optional string stackTrace = 5;

@@ -1,0 +1,33 @@
+/**
+ * Definitions for the cluster state variables as recorded in the coordinator and worker lock files.
+ */
+
+option java_generic_services = true;
+
+option java_package = "com.mapr.workGroup";
+
+option java_outer_classname = "ClusterState";
+
+enum WorkerType {
+    COORDINATOR = 0;
+    WORKER = 1;
+    WORKER_EXIT = 2;
+    DRONE = 3;
+    ALL_EXIT = 4;
+}
+
+message State {
+    repeated Assignment nodes = 1;
+
+    message Assignment {
+        optional WorkerType type = 1;
+        optional string id = 2;
+        optional bytes Configuration = 3;
+    }
+}
+
+message Lock {
+    optional string id = 1;
+    optional string hostname = 2;
+    optional uint32 port = 3;
+}

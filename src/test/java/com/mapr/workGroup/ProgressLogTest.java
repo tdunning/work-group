@@ -4,6 +4,12 @@ import org.junit.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
@@ -48,4 +54,27 @@ public class ProgressLogTest {
         assertTrue(log.finished());
         assertFalse(log.success());
     }
+
+    @Test
+    public void genericParser() throws InvocationTargetException, NoSuchMethodException, IllegalAccessException, IOException {
+        ProgressNote.Update x = ProgressNote.Update.getDefaultInstance();
+        Path tmp = Files.createTempFile("foo", ".foo");
+        ProgressNote.Update.Builder tmpVal = ProgressNote.Update.newBuilder();
+        tmpVal.getNoteBuilder().setId(3).setNote("hello").build();
+        OutputStream out = Files.newOutputStream(tmp);
+        tmpVal.build().writeDelimitedTo(out);
+        out.close();
+        System.out.printf("%s", parse(x, tmp));
+    }
+
+    <T> T parse(T instance, Path tmp) throws NoSuchMethodException, IOException, InvocationTargetException, IllegalAccessException {
+        Method m = instance.getClass().getMethod("parseDelimitedFrom", InputStream.class);
+        InputStream in = Files.newInputStream(tmp);
+        try {
+            return (T) m.invoke(null, in);
+        } finally {
+            in.close();
+        }
+    }
+
 }

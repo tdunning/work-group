@@ -12,18 +12,19 @@ enum WorkerType {
     COORDINATOR = 0;
     WORKER = 1;
     WORKER_EXIT = 2;
-    DRONE = 3;
-    ALL_EXIT = 4;
+    WORKER_TIMEOUT = 3;
+    DRONE = 4;
+    ALL_EXIT = 5;
 }
 
 message State {
     repeated Assignment nodes = 1;
+}
 
-    message Assignment {
-        optional WorkerType type = 1;
-        optional string id = 2;
-        optional bytes Configuration = 3;
-    }
+message Assignment {
+    optional WorkerType type = 1;
+    optional string id = 2;
+    optional bytes Configuration = 3;
 }
 
 message Lock {

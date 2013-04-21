@@ -5,10 +5,12 @@ import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.channels.FileChannel;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
@@ -54,12 +56,14 @@ public class Coordinator extends GroupThread {
 
             final File lockDirectory = new File(getBaseDirectory(), Constants.getWorkerLockDir());
 
+            // get a list of workers, how many and how long we way depends on the quorumConfiguration
             final Set<String> workers = getWorkerQuorum(quorumConfiguration, lockDirectory);
 
-            // anybody who arrives at this point should be told to go away
+            // anybody who arrives at this point should be told to go away.
+            // this starts a thread that watches for these latecomers
             turnAwayLateComers(lockDirectory, workers);
 
-            // set up to watch the log files for all the workers
+            // set up to watch the log files for all the real workers
             // we do this before we put out any assignments
             final Set<String> liveWorkers = Collections.synchronizedSet(Sets.<String>newHashSet(workers));
             final AtomicInteger success = new AtomicInteger();
@@ -77,11 +81,13 @@ public class Coordinator extends GroupThread {
             waitForCompletion(workers, liveWorkers, success, failure, pending);
 
             // write completion message to coordinator lock file so that stragglers know to give up
-            state.addNodesBuilder()
-                    .setType(ClusterState.WorkerType.ALL_EXIT);
-            writeLockState();
+            writeAssignment(ClusterState.Assignment.newBuilder()
+                    .setId(getId().toStringUtf8())
+                    .setType(ClusterState.WorkerType.ALL_EXIT)
+                    .build());
 
             setState(log, ThreadState.EXIT);
+            getWatcher().close();
             return failure.get();
         } else {
             return 0;
@@ -111,10 +117,12 @@ public class Coordinator extends GroupThread {
     private void waitForCompletion(Set<String> workers, Set<String> liveWorkers,
                                    AtomicInteger success, AtomicInteger failure, Semaphore pending)
             throws InterruptedException {
+        // wait for all pending processes to complete
         pending.acquire();
         log.info("Coordinator detected completion with {} failures and {} successes", failure.get(), success.get());
         int stillRunning = liveWorkers.size();
         if (stillRunning > 0) {
+            // this is very weird unless there was a failure
             log.info("{} workers still running", stillRunning);
         }
 
@@ -145,26 +153,44 @@ public class Coordinator extends GroupThread {
                 public void changeNotify(Watcher watcher, File f) {
                     log.info("Saw log update on {}", worker);
                     try {
-                        ProgressNote.Update update = ProgressNote.Update.parseDelimitedFrom(input);
-                        if (update.hasComplete()) {
-                            boolean returnStatus = update.getComplete().getExitStatus() == 0;
-                            liveWorkers.remove(f.getName());
-                            if (returnStatus) {
-                                success.incrementAndGet();
-                                pending.release();
-                            } else {
-                                failure.incrementAndGet();
-                                pending.release(workers.size());
+                        FileChannel ch = input.getChannel();
+                        if (ch.size() > ch.position() + 4) {
+                            DataInputStream dis = new DataInputStream(input);
+
+                            int size = dis.readInt();
+                            if (size <= 0 || size > 100000) {
+                                IOException e = new IOException("Invalid byte count in " + logFile);
+                                log.error("Invalid count", e);
+                                throw e;
                             }
-                            watcher.remove(f);
-                        } else {
-                            liveWorkers.add(f.getName());
+
+                            if (ch.size() >= ch.position() + size) {
+                                byte[] bytes = new byte[size];
+                                dis.readFully(bytes);
+                                ProgressNote.Update update = ProgressNote.Update.parseFrom(bytes);
+                                // TODO handle other message types, notably counter updates
+                                if (update.hasComplete()) {
+                                    boolean returnStatus = update.getComplete().getExitStatus() == 0;
+                                    liveWorkers.remove(f.getName());
+                                    if (returnStatus) {
+                                        success.incrementAndGet();
+                                        pending.release();
+                                    } else {
+                                        failure.incrementAndGet();
+                                        pending.release(workers.size());
+                                    }
+                                    watcher.remove(f);
+                                } else {
+                                    liveWorkers.add(f.getName());
+                                }
+                            } else {
+                                // the rest of the bytes should appear shortly but we ought to mention this
+                                log.info("Not enough bytes for message in {} at position {}", logFile, ch.position());
+                            }
                         }
                     } catch (IOException e) {
-                        log.error("Error parsing log file entry, possibly due to race condition");
-                        e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+                        log.error("Error parsing log file entry, possibly due to race condition", e);
                     }
-
                 }
 
                 @Override
@@ -182,10 +208,12 @@ public class Coordinator extends GroupThread {
             @Override
             public void changeNotify(Watcher watcher, File f) {
                 if (!workers.contains(f.getName())) {
-                    state.addNodesBuilder()
-                            .setId(f.getName())
-                            .setType(ClusterState.WorkerType.DRONE);
-                    writeLockState();
+                    writeAssignment(
+                            ClusterState.Assignment.newBuilder()
+                                    .setId(f.getName())
+                                    .setType(ClusterState.WorkerType.DRONE)
+                                    .build()
+                    );
                 } else {
                     log.error("Worker {} appeared late, but was already in workers list", f);
                 }
@@ -199,10 +227,17 @@ public class Coordinator extends GroupThread {
         });
     }
 
-    private void writeLockState() {
+    private void writeAssignment(ClusterState.Assignment assignment) {
         try {
-            Files.write(new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath(), state.build().toByteArray(),
-                    StandardOpenOption.WRITE);
+            java.io.DataOutputStream out = new java.io.DataOutputStream(Files.newOutputStream(
+                    new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath(), StandardOpenOption.APPEND));
+            try {
+                byte[] bytes = assignment.toByteArray();
+                out.writeInt(bytes.length);
+                out.write(bytes);
+            } finally {
+                out.close();
+            }
         } catch (IOException e) {
             log.error("Error writing coordinator lock file", e);
             // TODO decide what kind of exception to throw.  We should probably abort everything at this point
@@ -237,6 +272,14 @@ public class Coordinator extends GroupThread {
         return workers;
     }
 
+    /**
+     * Examine our current situation to determine if we have an acceptable quorum.
+     *
+     * @param t0                  When we started looking for workers
+     * @param quorumConfiguration The specification of how many workers we need and when
+     * @param workers             The set of workers we currently have committed to our efforts
+     * @return true iff the number of workers is acceptable relative to our requirements
+     */
     private boolean acceptable(long t0, List<AcceptableState> quorumConfiguration, Set<String> workers) {
         long t = System.nanoTime() / 1000000 - t0;
         for (AcceptableState condition : quorumConfiguration) {

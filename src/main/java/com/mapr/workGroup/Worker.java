@@ -1,16 +1,21 @@
 package com.mapr.workGroup;
 
+import com.google.common.collect.Queues;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.EOFException;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
-import java.util.List;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A worker is a process which shares state in a file system in order to coordinate a fixed number
@@ -71,10 +76,14 @@ public class Worker extends GroupThread {
     private Logger log = LoggerFactory.getLogger(Coordinator.class);
 
     public static Future start(File baseDirectory) {
-        return Executors.newSingleThreadScheduledExecutor().submit(new Worker(baseDirectory));
+        try {
+            return Executors.newSingleThreadScheduledExecutor().submit(new Worker(baseDirectory));
+        } catch (IOException e) {
+            throw new RuntimeException("Couldn't read coordinator lock file... cannot go on", e);
+        }
     }
 
-    public Worker(File baseDirectory) {
+    public Worker(File baseDirectory) throws IOException {
         super(baseDirectory);
     }
 
@@ -88,48 +97,76 @@ public class Worker extends GroupThread {
     public Object call() throws Exception {
         setState(log, ThreadState.WORKER);
 
-        final File coordinatorLockFile = new File(getBaseDirectory(), Constants.getCoordinatorLock());
+        final BlockingQueue<ClusterState.Assignment> toDo = getAssignments();
 
-        // start scanning for directions
-        getWatcher().watch(coordinatorLockFile, new Watcher.Watch() {
+        // writing this lock-file should trigger the coordinator to tell us what to do
+        Files.write(new File(new File(getBaseDirectory(), Constants.getWorkerLockDir()), getId().toStringUtf8()).toPath(),
+                new byte[0], StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+
+        final File updateLogFile = null;  // TODO make this real
+
+        ClusterState.Assignment assignment = toDo.poll(Constants.getWorkerStartupTimeout(), TimeUnit.MILLISECONDS);
+        loop:
+        while (assignment != null) {
+            switch (assignment.getType()) {
+                case DRONE:
+                    setState(log, ThreadState.WORKER_SUCCESS);
+                    break;
+
+                case WORKER_EXIT:
+                    setState(log, ThreadState.WORKER_KILL);
+                    break;
+
+                case WORKER_TIMEOUT:
+                    setState(log, ThreadState.WORKER_FAIL);
+                    break loop;
+
+                case WORKER:
+                    // TODO start assignment cooking here
+                    break;
+
+                default:
+                    throw new RuntimeException("Can't happen, got " + assignment.toString());
+            }
+            assignment = toDo.poll();
+        }
+
+        // now lay about looking for status updates from the process log
+        // ultimately we should receive a completion flag or time out waiting
+        ProgressNote.Update.Builder timeoutUpdate = ProgressNote.Update.newBuilder();
+        timeoutUpdate.getCompleteBuilder().setExitStatus(1).setExitMessage("Process timed out").build();
+//        final BlockingQueue<ProgressNote.Update> updateQueue = MessageInput.getMessages(getWatcher(), updateLogFile,
+//                timeoutUpdate.build(), Constants.getWorkerProgressTimeout());
+
+//        ProgressNote.Update update = updateQueue.poll(Constants.getWorkerProgressTimeout(), TimeUnit.MILLISECONDS);
+        return null;
+    }
+
+    private BlockingQueue<ProgressNote.Update> getUpdates(final File updateLogFile) throws IOException {
+        final BlockingQueue<ProgressNote.Update> updateQueue = Queues.newLinkedBlockingQueue();
+        getWatcher().watch(updateLogFile, new Watcher.Watch() {
+            private long updateOffset = 0;
+            private FileChannel updateLockChannel;
+            private InputStream updateLockStream;
+
+            {
+                updateLockChannel = FileChannel.open(
+                        updateLogFile.toPath(),
+                        StandardOpenOption.READ);
+                updateLockStream = Channels.newInputStream(updateLockChannel);
+            }
+
             @Override
             public void changeNotify(Watcher watcher, File f) {
-                boolean exit = false;
                 try {
-                    exit = false;
-                    String todo = null;
-                    List<ClusterState.State.Assignment> assignments = ClusterState.State.parseFrom(new FileInputStream(coordinatorLockFile)).getNodesList();
-
-                    scan:
-                    for (ClusterState.State.Assignment assignment : assignments) {
-                        switch (assignment.getType()) {
-                            case WORKER_EXIT:
-                            case DRONE:
-                                if (assignment.getId().equals(getId().toStringUtf8())) {
-                                    exit = true;
-                                    break scan;
-                                }
-                                break;
-
-                            case ALL_EXIT:
-                                exit = true;
-                                break scan;
-
-                            case WORKER:
-                                if (assignment.getId().equals(getId().toStringUtf8())) {
-                                    // TODO record assignment
-                                }
-                                break;
-
-                            default:
-                                // TODO shut everything down somehow
-                                throw new RuntimeException("Can't happen");
-                        }
-                    }
+                    updateLockChannel.position(updateOffset);
+                    ProgressNote.Update update = ProgressNote.Update.parseDelimitedFrom(updateLockStream);
+                    updateOffset = updateLockChannel.position();
+                    updateQueue.add(update);
+                } catch (EOFException e) {
+                    // ignore EOF ... more data will come soon
                 } catch (IOException e) {
-                    // TODO what happens when we can't read the file?
-                    log.error("Can't read coordinator lock file", e);
-                    e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
+                    throw new RuntimeException("Can't read update log", e);
                 }
             }
 
@@ -137,30 +174,74 @@ public class Worker extends GroupThread {
             public void timeoutNotify(Watcher watcher, File f) {
                 throw new UnsupportedOperationException("Default operation");
             }
+        }, Constants.getWorkerProgressTimeout());
+        return updateQueue;
+    }
+
+    private BlockingQueue<ClusterState.Assignment> getAssignments() throws IOException {
+        final BlockingQueue<ClusterState.Assignment> toDo = Queues.newLinkedBlockingQueue();
+        final File coordinatorLockFile = new File(getBaseDirectory(), Constants.getCoordinatorLock());
+
+        // start scanning for directions.  This watcher filters the messages that come through
+        // so that only the important ones come through the assignment queue
+        getWatcher().watch(coordinatorLockFile, new Watcher.Watch() {
+            boolean assigned = false;
+            private long coordinatorOffset = 0;
+            private FileChannel coordinatorLockChannel;
+            private InputStream coordinatorLockStream;
+
+            {
+                coordinatorLockChannel = FileChannel.open(
+                        new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath(),
+                        StandardOpenOption.READ);
+                coordinatorLockStream = Channels.newInputStream(coordinatorLockChannel);
+            }
+
+            @Override
+            public void changeNotify(Watcher watcher, File f) {
+                try {
+                    coordinatorLockChannel.position(coordinatorOffset);
+                    ClusterState.Assignment assignment = ClusterState.Assignment.parseDelimitedFrom(coordinatorLockStream);
+                    coordinatorOffset = coordinatorLockChannel.position();
+                    switch (assignment.getType()) {
+                        case WORKER_EXIT:
+                        case DRONE:
+                            if (assignment.getId().equals(getId().toStringUtf8())) {
+                                toDo.add(assignment);
+                            }
+                            break;
+
+                        case ALL_EXIT:
+                            toDo.add(assignment);
+                            break;
+
+                        case WORKER:
+                            if (assignment.getId().equals(getId().toStringUtf8())) {
+                                toDo.add(assignment);
+                                assigned = true;
+                            }
+                            break;
+
+                        default:
+                            // TODO shut everything down somehow
+                            throw new RuntimeException("Can't happen, got " + assignment.toString());
+                    }
+                } catch (EOFException e1) {
+                    // message not ready yet
+                } catch (IOException e) {
+                    throw new RuntimeException("Error reading coordinator lock file", e);
+                }
+            }
+
+            @Override
+            public void timeoutNotify(Watcher watcher, File f) {
+                if (!assigned) {
+                    toDo.add(ClusterState.Assignment.newBuilder()
+                            .setType(ClusterState.WorkerType.WORKER_TIMEOUT)
+                            .build());
+                }
+            }
         }, Constants.getWorkerStartupTimeout());
-
-        // writing this lock-file should trigger the coordinator to tell us what to do
-        Files.write(new File(new File(getBaseDirectory(), Constants.getWorkerLockDir()), getId().toStringUtf8()).toPath(),
-                new byte[0], StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
-
-
-        // TODO hang around waiting for an assignment from the coordinator.  If the coordinator doesn't give us an assignment
-        // after a reasonable timeout, we should fail.  When scanning for an assignment, we should use a backoff scheme
-        // to get fast response without hammering the status calls too much.  When we get the assignment, we should immediately
-        // start.
-
-//        <li>WORKER - can go to WORKER_FAIL or WORKER_KILL or WORKER_SUCCESS.  Process should monitor the coordinator
-//        lock file for changes.  The coordinator lock file will be empty or will contain a list of process assignments.
-//        If a worker sees a change in this file, it should read the file and note the assignment for itself.  This
-//        assignment can direct the worker to take on a role of worker or drone or it can tell the process to exit
-//        immediately.  If given a drone role, the process should transition immediately to WORKER_SUCCESS.  If told
-//        to exit, the process should transition to WORKER_KILL.  If told to be a worker, the process should read
-//        its assignment and run that task.  While running the task, the process should write progress notes fairly often
-//        and should check for exit instructions as well.  Upon completion of the task, the process can transition to
-//        WORKER_SUCCESS or WORKER_FAIL as appropriate.</li>
-
-//        getWatcher().watch();
-
-        return null;
+        return toDo;
     }
 }

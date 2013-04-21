@@ -64,10 +64,11 @@ public class Watcher {
      * @param timeoutMs After this many milliseconds with no change, timeoutNotify will be called
      */
     public void watch(File f, Watch w, long timeoutMs) {
+        w.lastSize.set(f.length());
         w.lastChange.set(f.lastModified());
         w.start = System.currentTimeMillis();
-        toWatch.put(f, w);
         w.timeout = timeoutMs;
+        toWatch.put(f, w);
     }
 
     /**
@@ -86,18 +87,30 @@ public class Watcher {
             for (File file : toWatch.keySet()) {
                 Watch watch = toWatch.get(file);
 
+                // check for change in time or size,
                 long t = watch.lastChange.get();
+                long s = watch.lastSize.get();
                 long lastMod = file.exists() ? file.lastModified() : 0;
-                while (lastMod > t) {
-                    if (watch.lastChange.compareAndSet(t, lastMod)) {
+                long lastSize = file.exists() ? file.length() : 0;
+
+                // if we note a change, loop until we can correctly update the size and tme
+                while (lastMod > t || lastSize > s) {
+                    // watch out for some other thread updating this same structure
+                    if (watch.lastChange.compareAndSet(t, lastMod) && watch.lastSize.compareAndSet(s, lastSize)) {
                         changes++;
                         watch.changeNotify(this, file);
                         t = lastMod;
+                        s = lastSize;
                     } else {
+                        // somebody else bumped in and changed things ... try again
                         t = watch.lastChange.get();
+                        s = watch.lastSize.get();
+
                         lastMod = file.lastModified();
+                        lastSize = file.exists() ? file.length() : 0;
                     }
                 }
+                // ok, any changes have been notified, check for timeout
                 if (watch.timeout != -1 && file.lastModified() + watch.timeout < System.currentTimeMillis()) {
                     watch.timeoutNotify(this, file);
                 }
@@ -124,8 +137,13 @@ public class Watcher {
         toWatch.remove(f);
     }
 
+    public void close() {
+        ex.shutdownNow();
+    }
+
     public static abstract class Watch<T> {
         private AtomicLong lastChange = new AtomicLong(System.currentTimeMillis());
+        private AtomicLong lastSize = new AtomicLong(0);
         private Semaphore finished = new Semaphore(0);
 
         private long start = 0;

@@ -24,7 +24,8 @@ message State {
 message Assignment {
     optional WorkerType type = 1;
     optional string id = 2;
-    optional bytes Configuration = 3;
+    repeated string command = 3;
+    optional bytes Configuration = 4;
 }
 
 message Lock {

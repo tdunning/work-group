@@ -8,9 +8,11 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Executors;
@@ -76,14 +78,10 @@ public class Worker extends GroupThread {
     private Logger log = LoggerFactory.getLogger(Coordinator.class);
 
     public static Future start(File baseDirectory) {
-        try {
-            return Executors.newSingleThreadScheduledExecutor().submit(new Worker(baseDirectory));
-        } catch (IOException e) {
-            throw new RuntimeException("Couldn't read coordinator lock file... cannot go on", e);
-        }
+        return Executors.newSingleThreadScheduledExecutor().submit(new Worker(baseDirectory));
     }
 
-    public Worker(File baseDirectory) throws IOException {
+    public Worker(File baseDirectory) {
         super(baseDirectory);
     }
 
@@ -99,37 +97,78 @@ public class Worker extends GroupThread {
 
         final BlockingQueue<ClusterState.Assignment> toDo = getAssignments();
 
-        // writing this lock-file should trigger the coordinator to tell us what to do
-        Files.write(new File(new File(getBaseDirectory(), Constants.getWorkerLockDir()), getId().toStringUtf8()).toPath(),
-                new byte[0], StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        // creating this lock-file should trigger the coordinator to tell us what to do
+        Path logFile = new File(new File(getBaseDirectory(), Constants.getWorkerLockDir()), getId().toStringUtf8()).toPath();
+        Files.write(logFile, new byte[0], StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+
+        MessageOutput<ProgressNote.Update> out = new MessageOutput<ProgressNote.Update>(logFile) {
+            @Override
+            public void writeDelimitedTo(OutputStream stream, ProgressNote.Update v) throws IOException {
+                v.writeDelimitedTo(stream);
+            }
+        };
 
         final File updateLogFile = null;  // TODO make this real
 
         ClusterState.Assignment assignment = toDo.poll(Constants.getWorkerStartupTimeout(), TimeUnit.MILLISECONDS);
+        ChildProcess child = null;
         loop:
         while (assignment != null) {
             switch (assignment.getType()) {
                 case DRONE:
+                    // TODO kill our child here if still running
+                    // TODO record success
                     setState(log, ThreadState.WORKER_SUCCESS);
-                    break;
+                    break loop;
 
                 case WORKER_EXIT:
+                case ALL_EXIT:
+                    // TODO kill our child here if still running
+                    // TODO record success
                     setState(log, ThreadState.WORKER_KILL);
-                    break;
+                    break loop;
 
                 case WORKER_TIMEOUT:
+                    // TODO kill our child here if still running
+                    // TODO record fail
                     setState(log, ThreadState.WORKER_FAIL);
                     break loop;
 
                 case WORKER:
-                    // TODO start assignment cooking here
+                    // TODO start child cooking here
+                    child = ChildProcess.builder(assignment.getCommandList()).run();
                     break;
 
                 default:
                     throw new RuntimeException("Can't happen, got " + assignment.toString());
             }
-            assignment = toDo.poll();
+            assignment = toDo.poll(100, TimeUnit.MILLISECONDS);
+
+            if (child != null) {
+                Integer r = child.waitFor(10, TimeUnit.MILLISECONDS);
+                if (r != null) {
+                    // child finished
+                    if (r==0) {
+                        setState(log, ThreadState.WORKER_SUCCESS);
+                        ProgressNote.Update.Builder note = ProgressNote.Update.newBuilder();
+                        note.getCompleteBuilder().setExitStatus(r).setId(getId().toStringUtf8()).build();
+                        out.write(note.build());
+                    } else {
+                        setState(log, ThreadState.WORKER_FAIL);
+                        ProgressNote.Update.Builder note = ProgressNote.Update.newBuilder();
+                        note.getCompleteBuilder()
+                                .setExitStatus(r)
+                                .setId(getId().toStringUtf8())
+                                .setStackTrace(child.errorOutput())
+                                .build();
+                        out.write(note.build());
+                    }
+                    getWatcher().close();
+                    return r;
+                }
+            }
         }
+
 
         // now lay about looking for status updates from the process log
         // ultimately we should receive a completion flag or time out waiting
@@ -178,6 +217,11 @@ public class Worker extends GroupThread {
         return updateQueue;
     }
 
+    /**
+     * Monitors the coordinators output file looking for assignments for us.
+     * @return
+     * @throws IOException
+     */
     private BlockingQueue<ClusterState.Assignment> getAssignments() throws IOException {
         final BlockingQueue<ClusterState.Assignment> toDo = Queues.newLinkedBlockingQueue();
         final File coordinatorLockFile = new File(getBaseDirectory(), Constants.getCoordinatorLock());
@@ -187,22 +231,22 @@ public class Worker extends GroupThread {
         getWatcher().watch(coordinatorLockFile, new Watcher.Watch() {
             boolean assigned = false;
             private long coordinatorOffset = 0;
-            private FileChannel coordinatorLockChannel;
-            private InputStream coordinatorLockStream;
+            private MessageInput<ClusterState.Assignment> coordinatorLockStream;
 
             {
-                coordinatorLockChannel = FileChannel.open(
-                        new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath(),
-                        StandardOpenOption.READ);
-                coordinatorLockStream = Channels.newInputStream(coordinatorLockChannel);
+                Path path = new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath();
+                coordinatorLockStream = new MessageInput<ClusterState.Assignment>(path) {
+                    @Override
+                    public ClusterState.Assignment parse(InputStream in) throws IOException {
+                        return ClusterState.Assignment.parseDelimitedFrom(in);
+                    }
+                };
             }
 
             @Override
             public void changeNotify(Watcher watcher, File f) {
                 try {
-                    coordinatorLockChannel.position(coordinatorOffset);
-                    ClusterState.Assignment assignment = ClusterState.Assignment.parseDelimitedFrom(coordinatorLockStream);
-                    coordinatorOffset = coordinatorLockChannel.position();
+                    ClusterState.Assignment assignment = coordinatorLockStream.read();
                     switch (assignment.getType()) {
                         case WORKER_EXIT:
                         case DRONE:

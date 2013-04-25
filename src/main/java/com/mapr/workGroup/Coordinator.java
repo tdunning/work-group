@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.channels.FileChannel;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
@@ -24,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class Coordinator extends GroupThread {
     private Logger log = LoggerFactory.getLogger(Coordinator.class);
-    private ClusterState.State.Builder state;
+    MessageOutput<ClusterState.Assignment> coordinatorOutput;
 
     /**
      * Creates a thread that tries to become a coordinator.  If the thread is able to become a coordinator,
@@ -35,7 +36,7 @@ public class Coordinator extends GroupThread {
      * @param baseDirectory The directory in which all status info is kept.
      * @return A future that can be used to wait for the coordinator to finish.
      */
-    public static Future<Object> start(File baseDirectory) {
+    public static Future<Object> start(File baseDirectory) throws IOException {
         return Executors.newSingleThreadScheduledExecutor().submit(new Coordinator(baseDirectory));
     }
 
@@ -44,8 +45,15 @@ public class Coordinator extends GroupThread {
      *
      * @param baseDirectory The directory in which status files will be kept.
      */
-    private Coordinator(File baseDirectory) {
+    private Coordinator(File baseDirectory) throws IOException {
         super(baseDirectory);
+
+        coordinatorOutput = new MessageOutput<ClusterState.Assignment>(new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath()) {
+            @Override
+            public void writeDelimitedTo(OutputStream stream, ClusterState.Assignment v) throws IOException {
+                v.writeDelimitedTo(stream);
+            }
+        };
     }
 
     @Override
@@ -96,15 +104,15 @@ public class Coordinator extends GroupThread {
 
     private boolean coordinatorLock() throws IOException {
         try {
-            state = ClusterState.State.newBuilder();
-            state.addNodesBuilder()
-                    .setType(ClusterState.WorkerType.COORDINATOR)
-                    .setId(getId().toStringUtf8())
-                    .build();
 
             // if we are able to create this file, we have the job
-            Files.write(new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath(), state.build().toByteArray(),
+            Files.write(new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath(), new byte[0],
                     StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+
+            writeAssignment(ClusterState.Assignment.newBuilder()
+                    .setType(ClusterState.WorkerType.COORDINATOR)
+                    .setId(getId().toStringUtf8())
+                    .build());
 
             // no exception means we won the race and can become coordinator
             setState(log, ThreadState.COORDINATOR);
@@ -128,13 +136,8 @@ public class Coordinator extends GroupThread {
 
         if (failure.get() > 0) {
             setState(log, ThreadState.COORDINATOR_FAIL);
-            for (String worker : workers) {
-                if (liveWorkers.contains(worker)) {
-                    state.addNodesBuilder()
-                            .setId(worker)
-                            .setType(ClusterState.WorkerType.WORKER_EXIT);
-                }
-            }
+            writeAssignment(ClusterState.Assignment.newBuilder()
+                    .setType(ClusterState.WorkerType.ALL_EXIT).build());
         } else {
             setState(log, ThreadState.COORDINATOR_SUCCESS);
         }
@@ -229,15 +232,7 @@ public class Coordinator extends GroupThread {
 
     private void writeAssignment(ClusterState.Assignment assignment) {
         try {
-            java.io.DataOutputStream out = new java.io.DataOutputStream(Files.newOutputStream(
-                    new File(getBaseDirectory(), Constants.getCoordinatorLock()).toPath(), StandardOpenOption.APPEND));
-            try {
-                byte[] bytes = assignment.toByteArray();
-                out.writeInt(bytes.length);
-                out.write(bytes);
-            } finally {
-                out.close();
-            }
+            coordinatorOutput.write(assignment);
         } catch (IOException e) {
             log.error("Error writing coordinator lock file", e);
             // TODO decide what kind of exception to throw.  We should probably abort everything at this point

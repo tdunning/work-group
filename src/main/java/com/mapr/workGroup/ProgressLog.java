@@ -1,3 +1,19 @@
+/*
+ * Copyright MapR Technologies, 2013
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.mapr.workGroup;
 
 import com.google.common.collect.Maps;
@@ -27,7 +43,7 @@ public class ProgressLog {
         this.id = new Random().nextLong();
         ProgressNote.Update.Builder out = ProgressNote.Update.newBuilder();
         out.getStartBuilder()
-                .setId(id)
+                .setId(String.format("%08x",id))
                 .setTime(System.currentTimeMillis())
                 .setName(name)
                 .build();
@@ -41,7 +57,7 @@ public class ProgressLog {
     public void increment(String name, int delta) throws IOException {
         ProgressNote.Update.Builder out = ProgressNote.Update.newBuilder();
         ProgressNote.Progress.Builder note = out.getProgressBuilder()
-                .setId(id)
+                .setId(String.format("%08x",id))
                 .setTime(System.currentTimeMillis());
         note.addCountBuilder().setKey(name).setIntegerIncrement(delta).build();
         out.build().writeDelimitedTo(stream);
@@ -50,7 +66,7 @@ public class ProgressLog {
     public void note(String note) throws IOException {
         ProgressNote.Update.Builder out = ProgressNote.Update.newBuilder();
         out.getNoteBuilder()
-                .setId(id)
+                .setId(String.format("%08x",id))
                 .setTime(System.currentTimeMillis())
                 .setNote(note)
                 .build();
@@ -60,7 +76,7 @@ public class ProgressLog {
     public void finish() throws IOException {
         ProgressNote.Update.Builder out = ProgressNote.Update.newBuilder();
         out.getCompleteBuilder()
-                .setId(id)
+                .setId(String.format("%08x",id))
                 .setTime(System.currentTimeMillis())
                 .setExitStatus(0)
                 .build();
@@ -77,7 +93,7 @@ public class ProgressLog {
 
         ProgressNote.Update.Builder out = ProgressNote.Update.newBuilder();
         out.getCompleteBuilder()
-                .setId(id)
+                .setId(String.format("%08x",id))
                 .setTime(System.currentTimeMillis())
                 .setExitMessage(message)
                 .setStackTrace(stack.toString())

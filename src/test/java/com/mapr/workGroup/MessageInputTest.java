@@ -1,3 +1,19 @@
+/*
+ * Copyright MapR Technologies, 2013
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.mapr.workGroup;
 
 import org.junit.Test;
@@ -31,28 +47,28 @@ public class MessageInputTest {
         };
         for (int i = 0; i < 20; i++) {
             ProgressNote.Update.Builder x = ProgressNote.Update.newBuilder();
-            x.getNoteBuilder().setId(i).build();
+            x.getNoteBuilder().setId(String.format("%08x", i)).build();
             out.write(x.build());
         }
         out.flush();
 
         for (int i = 0; i < 20; i++) {
             ProgressNote.Update x = in.read();
-            assertEquals(i, x.getNote().getId());
+            assertEquals(String.format("%08x", i), x.getNote().getId());
         }
 
         assertNull(in.read());
 
         for (int i = 0; i < 3; i++) {
             ProgressNote.Update.Builder x = ProgressNote.Update.newBuilder();
-            x.getNoteBuilder().setId(i).build();
+            x.getNoteBuilder().setId(String.format("%08x", i)).build();
             out.write(x.build());
         }
         out.close();
 
         for (int i = 0; i < 3; i++) {
             ProgressNote.Update x = in.read();
-            assertEquals(i, x.getNote().getId());
+            assertEquals(String.format("%08x", i), x.getNote().getId());
         }
     }
 
@@ -71,7 +87,7 @@ public class MessageInputTest {
         DataOutputStream out = new DataOutputStream(Files.newOutputStream(tmp));
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         ProgressNote.Update.Builder x = ProgressNote.Update.newBuilder();
-        x.getNoteBuilder().setId(35).setNote("this is a test").build();
+        x.getNoteBuilder().setId(String.format("%08x", 35)).setNote("this is a test").build();
         x.build().writeDelimitedTo(baos);
         byte[] buf = baos.toByteArray();
         assertTrue(buf.length > 3);
@@ -86,6 +102,6 @@ public class MessageInputTest {
         out.writeInt(buf.length);
         out.flush();
         ProgressNote.Update zz = in.read();
-        assertEquals(35, zz.getNote().getId());
+        assertEquals(String.format("%08x", 35), zz.getNote().getId());
     }
 }

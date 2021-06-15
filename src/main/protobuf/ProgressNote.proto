@@ -20,6 +20,7 @@
  * framework in order to propagate status info back into a larger framework.
  * Such a log can also be used for distributed process post-mortem analysis.
  */
+syntax = "proto2";
 
 option java_generic_services = true;
 option java_package = "com.mapr.workGroup";

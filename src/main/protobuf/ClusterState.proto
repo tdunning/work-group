@@ -18,6 +18,7 @@
  * Definitions for the cluster state variables as recorded in the coordinator and worker lock files.
  */
 
+syntax = "proto2";
 option java_generic_services = true;
 
 option java_package = "com.mapr.workGroup";

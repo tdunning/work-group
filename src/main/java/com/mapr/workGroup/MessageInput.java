@@ -16,7 +16,7 @@
 
 package com.mapr.workGroup;
 
-import com.google.protobuf.GeneratedMessage;
+import com.google.protobuf.GeneratedMessageV3;
 
 import java.io.DataInputStream;
 import java.io.EOFException;
@@ -31,7 +31,7 @@ import java.nio.file.StandardOpenOption;
  * Reads protobuf messages from a file carefully checking to make sure that messages are
  * complete and not perturbed by EOF effects.
  */
-public abstract class MessageInput<T extends GeneratedMessage> {
+public abstract class MessageInput<T extends GeneratedMessageV3> {
     private long offset = 0;
     private FileChannel channel;
     private DataInputStream stream;

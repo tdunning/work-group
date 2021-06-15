@@ -55,10 +55,41 @@
             <version>3.0.0</version>
             <type>jar</type>
         </dependency>
-    </dependencies>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>3.11.4</version>
+        </dependency>
 
-    <build>
-        <plugins>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java-util</artifactId>
+            <version>3.7.0</version>
+        </dependency>
+      </dependencies>
+      <build>
+        <extensions>
+          <extension>
+            <groupId>kr.motd.maven</groupId>
+            <artifactId>os-maven-plugin</artifactId>
+            <version>1.6.0</version>
+          </extension>
+        </extensions>
+	<plugins>
+	    <plugin>
+		<groupId>com.github.os72</groupId>
+		<artifactId>protoc-jar-maven-plugin</artifactId>
+		<version>3.11.4</version>
+		<executions>
+		    <execution>
+			<phase>generate-sources</phase>
+			<goals>
+			    <goal>run</goal>
+			</goals>
+		    </execution>
+		</executions>
+	    </plugin>
+
             <!--
                bind the maven-assembly-plugin to the package phase
                this will create a jar file without the storm dependencies
@@ -98,22 +129,6 @@
                         <phase>verify</phase>
                         <goals>
                             <goal>jar-no-fork</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <plugin>
-                <groupId>com.github.igor-petruk.protobuf</groupId>
-                <artifactId>protobuf-maven-plugin</artifactId>
-                <version>0.5.1</version>
-                <configuration>
-                    <protocCommand>/usr/local/bin/protoc</protocCommand>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>run</goal>
                         </goals>
                     </execution>
                 </executions>

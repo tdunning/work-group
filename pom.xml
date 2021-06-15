@@ -66,29 +66,29 @@
             <artifactId>protobuf-java-util</artifactId>
             <version>3.7.0</version>
         </dependency>
-      </dependencies>
-      <build>
+    </dependencies>
+    <build>
         <extensions>
-          <extension>
-            <groupId>kr.motd.maven</groupId>
-            <artifactId>os-maven-plugin</artifactId>
-            <version>1.6.0</version>
-          </extension>
+            <extension>
+                <groupId>kr.motd.maven</groupId>
+                <artifactId>os-maven-plugin</artifactId>
+                <version>1.6.0</version>
+            </extension>
         </extensions>
-	<plugins>
-	    <plugin>
-		<groupId>com.github.os72</groupId>
-		<artifactId>protoc-jar-maven-plugin</artifactId>
-		<version>3.11.4</version>
-		<executions>
-		    <execution>
-			<phase>generate-sources</phase>
-			<goals>
-			    <goal>run</goal>
-			</goals>
-		    </execution>
-		</executions>
-	    </plugin>
+        <plugins>
+            <plugin>
+                <groupId>com.github.os72</groupId>
+                <artifactId>protoc-jar-maven-plugin</artifactId>
+                <version>3.11.4</version>
+                <executions>
+                    <execution>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
 
             <!--
                bind the maven-assembly-plugin to the package phase
@@ -138,8 +138,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <source>1.6</source>
-                    <target>1.6</target>
+                    <source>8</source>
+                    <target>8</target>
                 </configuration>
             </plugin>
         </plugins>
